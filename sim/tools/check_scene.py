@@ -16,9 +16,17 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
-ROBOT_DIAMETER = 0.35   # m, the reference body. Change only if the robot changes.
-FLOOR_BAND = 0.15       # m, anything whose lowest point is below this blocks the robot.
-DRIVEABLE_HEIGHT = 0.03  # m, obstacles shorter than this are driven over, not around.
+# oomwoo-one, taken from its params.xacro. These are the real build numbers, not
+# round figures: 349 mm body, cylinder spanning 12.5 to 79 mm above the floor,
+# scanner sweeping at 88 mm. The band between FLOOR_CLEARANCE and BODY_TOP is
+# the one that matters — the body is hit by things the scanner never sees.
+ROBOT_DIAMETER = 0.349    # m
+FLOOR_CLEARANCE = 0.0125  # m, underside of the body
+BODY_TOP = 0.079          # m, top of the body cylinder
+SCAN_PLANE = 0.088        # m, height the LiDAR sweeps at
+
+FLOOR_BAND = BODY_TOP + 0.001  # anything reaching the body can take floor away
+DRIVEABLE_HEIGHT = 0.034       # m, the wheel radius: shorter steps get climbed
 
 # Every benchmark run starts here. Fixed on purpose: a run that starts somewhere
 # else is not comparable with the others. Keep this clear of furniture.
@@ -145,12 +153,21 @@ def main() -> int:
     blocks = sorted((c for c in cols if c.model == "gap_rig"), key=lambda c: c.cx)
     if len(blocks) < 2:
         problems.append("gap_rig has fewer than two blocks")
+    # A gap the body merely fits through is not a gap the robot can use: with no
+    # margin, any costmap inflation seals it. The three bands below are what make
+    # the rig a calibration instrument — one width that must never be attempted,
+    # one decided by the inflation setting, one that must always succeed.
     for a, b in zip(blocks, blocks[1:]):
         gap = b.xmin - a.xmax
-        verdict = ("impassable" if gap < ROBOT_DIAMETER else
-                   "tight" if gap < ROBOT_DIAMETER + 0.15 else "open")
-        print(f"  {a.link:>8} -> {b.link:<8} {gap:.2f} m   {verdict} "
-              f"(body {ROBOT_DIAMETER:.2f} m)")
+        margin = gap - ROBOT_DIAMETER
+        if margin < 0.03:
+            verdict = "must not be attempted"
+        elif margin < 0.25:
+            verdict = "decided by inflation"
+        else:
+            verdict = "always passable"
+        print(f"  {a.link:>8} -> {b.link:<8} {gap:.2f} m  "
+              f"margin {margin * 100:+.1f} cm   {verdict}")
     print()
 
     # 3. doorway
@@ -202,7 +219,25 @@ def main() -> int:
             print(f"  low enough to drive over: {parts}")
     print()
 
-    # 5. the spawn point must be clear at body radius, or every run starts fouled
+    # 5. what the scanner can and cannot see
+    print("perception")
+    blend = [c for c in cols if c.zmin < BODY_TOP and c.zmax > FLOOR_CLEARANCE]
+    seen = [c for c in blend if c.zmax >= SCAN_PLANE]
+    blind = [c for c in blend if c.zmax < SCAN_PLANE]
+    print(f"  scanner sweeps at {SCAN_PLANE * 1000:.0f} mm; body spans "
+          f"{FLOOR_CLEARANCE * 1000:.1f}-{BODY_TOP * 1000:.0f} mm")
+    for c in sorted(blind, key=lambda c: c.zmax):
+        climb = c.zmax <= DRIVEABLE_HEIGHT
+        note = ("climbable, so this tests mobility" if climb
+                else "too tall to climb, so this tests the bumper")
+        print(f"  BLIND  {c.model}/{c.link} tops out at {c.zmax * 1000:.0f} mm "
+              f"— {note}")
+    if not blind:
+        problems.append("no blind obstacle: nothing in the scene needs the bumper")
+    print(f"  {len(seen)} other colliders reach the scan plane and are visible")
+    print()
+
+    # 6. the spawn point must be clear at body radius, or every run starts fouled
     print("start pose")
     sx, sy, syaw = START_POSE
     r = ROBOT_DIAMETER / 2

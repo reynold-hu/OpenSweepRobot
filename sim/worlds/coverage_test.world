@@ -22,17 +22,18 @@
 
   Five things are being tested, each deliberately isolated:
     1. thin obstacles      table legs, 50 mm diameter
-    2. solid furniture     sofa, a body the LiDAR correctly reads as solid
-    3. phantom obstacles   curtain, which the LiDAR reads as solid and is not
+    2. solid furniture     sofa, reachable by the scan, honest about its extent
+    3. blind obstacles     low barrier, below the scan plane and invisible
     4. corners             room corners plus a concave corner at the partition
     5. gap widths          0.35 / 0.50 / 0.70 m, for the costmap sweep
 
   See ../README.md for how to run it and how coverage is measured.
 
-  Robot size assumption: body diameter 0.35 m (matches the reference build).
-  If your robot differs, scale the gap rig in the east-west direction, not the
-  whole scene — the room dimensions are meant to stay fixed across the project
-  so results stay comparable between runs and between people.
+  Robot assumed here is oomwoo-one: 349 mm body diameter, body cylinder from
+  12.5 mm to 79 mm above the floor, scanner sweeping at 88 mm. Those three
+  numbers are what make the low barrier invisible and the gap rig meaningful,
+  so if the robot changes, revisit both. Room dimensions stay fixed across the
+  project so results remain comparable between runs and between people.
 -->
 <sdf version="1.6">
   <world name="coverage_test">
@@ -213,22 +214,29 @@
       </link>
     </model>
 
-    <!-- ============ curtain: the phantom obstacle ============
-         Hangs from 0.30 m to 2.00 m. The gap underneath is the whole point: the
-         LiDAR sweeps at roughly 0.15-0.25 m and may or may not see the hem,
-         while the body is short enough to pass under. A sensor that believes
-         the scan treats this as a wall and loses coverage; a contact-tolerant
-         plan treats it as unknown and finds out by driving.
+    <!-- ============ low barrier: invisible to the scanner ============
+         A 50 mm ledge across the room, a stand-in for a cable, a rug edge or
+         the foot of a piece of furniture.
 
-         If your scanner sits below 0.30 m and sees under it cleanly, raise the
-         hem to 0.15 m — the element is meant to be borderline, not obvious. -->
+         Why it is invisible, in the robot's own numbers: the body cylinder runs
+         from 12.5 mm (floor clearance) to 79 mm, and the scanner sweeps at
+         88 mm. It burns straight over anything shorter than 79 mm, while the
+         body's lower edge plows into anything taller than 12.5 mm. That leaves
+         a blind band from 12.5 mm to 79 mm where the robot is hit by something
+         it cannot see at all — 50 mm sits in the middle of it.
 
-    <model name="curtain">
+         This is the case the whole contact-tolerant argument rests on, and it
+         is the opposite of a phantom obstacle. The scanner is not lying; it is
+         simply not looking down there. The planner will route straight through
+         this barrier, report nothing wrong, and be wrong. Only the bumper
+         finds out. -->
+
+    <model name="low_barrier">
       <static>true</static>
-      <pose>-0.60 -1.70 1.15 0 0 0</pose>
+      <pose>-0.60 -1.70 0.025 0 0 0</pose>
       <link name="link">
-        <collision name="c"><geometry><box><size>0.04 1.20 1.70</size></box></geometry></collision>
-        <visual name="v"><geometry><box><size>0.04 1.20 1.70</size></box></geometry>
+        <collision name="c"><geometry><box><size>0.04 1.20 0.05</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.04 1.20 0.05</size></box></geometry>
           <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
         </visual>
       </link>

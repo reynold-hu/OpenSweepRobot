@@ -11,9 +11,29 @@ ROS 2 Humble with Gazebo Classic:
 ros2 launch gazebo_ros gazebo.launch.py world:=$(pwd)/sim/worlds/coverage_test.world
 ```
 
-Spawning the robot is not wired up yet — that waits on which model we settle on.
-Until then the world is useful on its own for checking geometry and for
-rehearsing the measurement pipeline.
+Spawning the robot is not wired up yet. Until it is, the world is still useful on
+its own for checking geometry and for rehearsing the measurement pipeline.
+
+## Which robot
+
+`oomwoo-one` — OOMWOO's robot description — rather than TurtleBot3, so that the
+simulation is closer to the machine we intend to build. Every dimension and sensor
+height quoted in this document comes from its `params.xacro`.
+
+It is not a drop-in for our stack. OOMWOO targets ROS 2 Jazzy with Gazebo Sim, so
+its plugins are `gz-sim-*`; we run Humble with Gazebo Classic. The saving grace is
+that the package is split cleanly:
+
+| File | Contents | Portable? |
+| :-- | :-- | :-- |
+| `urdf/robot.urdf.xacro` | 13 links, 12 joints, visuals, inertials | **Yes** — contains no simulator references whatsoever |
+| `urdf/params.xacro` | dimensions, masses, sensor placements | **Yes** — plain property definitions |
+| `urdf/plugins.xacro` | every simulator plugin, ~326 lines | No — this is the whole port |
+
+So the port is confined to one file: rewriting the `gz-sim-*` plugins as Gazebo
+Classic `libgazebo_ros_*` plugins. Phase 1 needs only five of them — diff drive,
+2D LiDAR, bumper contacts, ground-truth odometry and joint states. The cameras, the
+ToF and the side range sensors are not needed to measure coverage and can wait.
 
 ## The scene
 
@@ -25,10 +45,36 @@ the full inventory; the parts that matter are:
 | :-- | :-- | :-- |
 | Table, four 50 mm legs, top at 0.70 m | four thin poles | thin-obstacle contouring. The top is above the scanner, so it is invisible and the robot navigates on the legs alone |
 | Sofa, skirt to the floor | a solid wall | solid furniture, where the scan is telling the truth |
-| Curtain, hem at 0.30 m | a solid wall | the phantom obstacle. The scanner sees it, the body fits underneath. Only a physical contact settles it |
+| Low barrier, 50 mm tall | **nothing at all** | the blind band, and the case the whole contact-tolerant argument rests on |
 | Partition doorway | an opening | the only route between rooms, so a plan that misses it loses half the flat |
-| Threshold, 20 mm | nearly nothing | mobility, not perception. A 20 mm step is close to invisible to a sweep at scanner height |
-| Gap rig, 0.35 / 0.50 / 0.70 m | three openings | the costmap sweep in phase 3. With a 0.35 m body the first is impassable, the second is decided by the inflation setting, the third should always pass |
+| Threshold, 20 mm | **nothing at all** | mobility. Invisible for the same reason as the barrier, but short enough for the wheels to climb |
+| Gap rig, 0.35 / 0.50 / 0.70 m | three openings | the costmap sweep in phase 3. The first has 1 mm of margin and must never be attempted, the second is decided by the inflation setting, the third must always pass |
+
+### The blind band
+
+This is worth stating precisely, because it drives the design. On oomwoo-one, taken
+from its `params.xacro`:
+
+| | height above floor |
+| :-- | --: |
+| underside of the body | 12.5 mm |
+| top of the body cylinder | 79 mm |
+| height the scanner sweeps at | 88 mm |
+
+The scanner burns over anything shorter than 79 mm. The body's lower edge plows into
+anything taller than 12.5 mm. So between 12.5 mm and 79 mm there is a band of
+obstacles the robot is stopped by and cannot see — and both blind elements in the
+scene sit in it.
+
+Note what this is *not*: it is not the scanner lying. A phantom obstacle, in the
+sense of something the scanner reports that is not there, is the opposite failure and
+is not what this scene models. Here the scanner is simply not looking down there. The
+planner routes straight through the barrier, reports nothing wrong, and is wrong.
+Only the bumper finds out.
+
+`check_scene.py` classifies every collider by this geometry, so moving a furniture
+height across the 88 mm line shows up in its output rather than silently changing
+what the benchmark measures.
 
 The gap rig is a calibration instrument, not furniture. It stands in for chair
 legs or a railing, and it is there so that phase 3 has three known widths to
