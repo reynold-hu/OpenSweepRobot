@@ -48,6 +48,24 @@ Phase 1 comes first on purpose. Without baseline numbers, no later comparison me
 anything. The first milestone is a reproducible coverage percentage measured on a
 fixed scene.
 
+### What has actually been run
+
+Being precise about this, because a repository that looks complete and a repository
+that runs are different things and the difference is invisible from the outside.
+
+| | State |
+| :-- | :-- |
+| Benchmark scene geometry | **Validated.** `check_scene.py` parses the world, checks for overlap, and verifies the gap widths, threshold height and start pose |
+| Coverage scoring | **Validated.** Run against synthetic trajectories with known answers |
+| Robot description, Gazebo Classic port | **Never loaded.** Written on a machine with no ROS 2 and no Gazebo; `check_description.py` covers only what can be checked statically |
+| Launch file | **Never run** |
+| Ground-truth recorder | **Never run against a live topic** |
+
+So the geometry and the measurement are trustworthy, and the simulation is not yet.
+Whoever brings it up first is doing the integration, not confirming it. Start by
+expanding the description on its own (`xacro robot.urdf.xacro`) and checking that the
+plugin topics exist, before trusting anything the simulation reports.
+
 ## Hardware
 
 Modular, and every part is meant to be replaceable with a commodity equivalent.
@@ -85,12 +103,21 @@ There is nothing to install yet. The first piece that exists is the simulation
 benchmark: a fixed two-room scene and the tools that score a run against it.
 
 ```bash
-ros2 launch gazebo_ros gazebo.launch.py world:=$(pwd)/sim/worlds/coverage_test.world
+ros2 launch sim/launch/coverage_test.launch.py            # bring up the benchmark
+python3 sim/tools/record_ground_truth.py run1.csv         # record the run
+python3 sim/tools/coverage_metrics.py run1.csv --duration 135   # score it
+```
+
+Before running any of that, expand the description and check it standalone:
+
+```bash
+xacro sim/description/urdf/robot.urdf.xacro > /tmp/robot.urdf
 python3 sim/tools/check_scene.py sim/worlds/coverage_test.world
+python3 sim/tools/check_description.py
 ```
 
 See [`sim/README.md`](sim/README.md) for the scene inventory and the measurement
-protocol. Robot spawning is not wired up yet.
+protocol.
 
 ## Naming
 
