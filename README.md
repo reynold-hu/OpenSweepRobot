@@ -36,7 +36,7 @@ modify, and repair.
 
 | Phase | What | State |
 | :-- | :-- | :-- |
-| 0 · Environment | ROS 2 + Gazebo + Nav2, fixed test world | Not started |
+| 0 · Environment | ROS 2 + Gazebo + Nav2, fixed test world | Scene and scoring tools done; robot spawning pending |
 | 1 · Baseline | Stock Nav2 + Regulated Pure Pursuit, measured | Not started |
 | 2 · Contact tolerance | Disable collision prediction, add bumper peel-off reflex | Not started |
 | 3 · Costmap | Calibrate inscribed radius and inflation for our body | Not started |
@@ -81,8 +81,16 @@ precisely the conditions under which feature-based visual odometry degrades.
 
 ## Getting started
 
-Not yet. There is nothing to install. The simulation environment is the first
-deliverable and it does not exist yet.
+There is nothing to install yet. The first piece that exists is the simulation
+benchmark: a fixed two-room scene and the tools that score a run against it.
+
+```bash
+ros2 launch gazebo_ros gazebo.launch.py world:=$(pwd)/sim/worlds/coverage_test.world
+python3 sim/tools/check_scene.py sim/worlds/coverage_test.world
+```
+
+See [`sim/README.md`](sim/README.md) for the scene inventory and the measurement
+protocol. Robot spawning is not wired up yet.
 
 ## Naming
 
