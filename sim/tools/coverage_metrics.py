@@ -31,7 +31,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_scene import collect, blocks_floor, room_bounds  # noqa: E402
+from check_scene import (  # noqa: E402
+    ROBOT_DIAMETER,
+    blocks_floor,
+    collect,
+    room_bounds,
+)
 
 RESOLUTION = 0.05   # m per grid cell
 STEP = 0.02         # m between interpolated footprints
@@ -83,8 +88,9 @@ def main() -> int:
     ap.add_argument("trajectory", type=Path)
     ap.add_argument("--world", type=Path,
                     default=Path("sim/worlds/coverage_test.world"))
-    ap.add_argument("--diameter", type=float, default=0.35,
-                    help="robot body diameter in metres (default 0.35)")
+    ap.add_argument("--diameter", type=float, default=ROBOT_DIAMETER,
+                    help=f"robot body diameter in metres "
+                         f"(default {ROBOT_DIAMETER}, from check_scene)")
     ap.add_argument("--duration", type=float, default=None,
                     help="score only the first N seconds, so runs of different "
                          "length can be compared fairly")
@@ -143,7 +149,10 @@ def main() -> int:
     print(f"coverage report — {args.world.name}")
     print(f"  trajectory        {len(poses)} poses over {wall:.1f} s")
     print(f"  path length       {path:.1f} m")
-    print(f"  body diameter     {args.diameter:.2f} m")
+    # Three decimals on purpose: the gap rig's tightest opening is 0.35 m and the
+    # body is 0.349, so rounding this to 0.35 would hide the distinction the
+    # scene is built around.
+    print(f"  body diameter     {args.diameter:.3f} m")
     print(f"  reachable floor   {total * cell:.2f} m2  ({total} cells @ {args.resolution} m)")
     print()
     print(f"  covered           {covered * cell:.2f} m2  ->  {100 * covered / max(1, total):.1f} %")
