@@ -1,0 +1,25 @@
+# ROS 2 workspaces
+build/
+install/
+log/
+
+# Colcon / test artifacts
+.colcon_workspace/
+Testing/
+*.pyc
+__pycache__/
+
+# Generated maps and vocabulary
+*.bin
+*.pgm
+*.yaml.bak
+
+# Editor and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Build systems
+CMakeCache.txt
+CMakeFiles/
