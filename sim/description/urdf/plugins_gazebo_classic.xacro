@@ -1,0 +1,279 @@
+<?xml version="1.0"?>
+<!--
+  Gazebo Classic port of oomwoo-one's simulator plugins.
+
+  Upstream (../LICENSE, Apache-2.0) targets ROS 2 Jazzy with Gazebo Sim, so its
+  plugins are `gz-sim-*` systems. We run Humble with Gazebo Classic, whose
+  plugins are `libgazebo_ros_*.so` and whose XML is a different shape. This file
+  is the whole port; robot.urdf.xacro, params.xacro, inertial.xacro and
+  materials.xacro are vendored unchanged.
+
+  The split is possible because upstream keeps every simulator reference out of
+  robot.urdf.xacro. The only edit to a vendored file is one include line:
+
+      upstream:  <xacro:include filename="plugins.xacro" />
+      ours:      <xacro:include filename="plugins_gazebo_classic.xacro" />
+
+  upstream's plugins.xacro is kept in the tree, unused, so it stays readable as
+  the reference for anything ported later.
+
+  Scope: only what phase 1 and 2 need to measure coverage. Deferred, not
+  impossible: the two stereo cameras, the front multizone ToF, and the left and
+  right side range sensors.
+
+  ===========================================================================
+  HOW THIS WAS WRITTEN, AND WHAT THAT MEANS FOR TRUST
+
+  None of it has been executed. The machine this was authored on has no ROS 2
+  and no Gazebo, so nothing here has been loaded by a simulator or expanded by
+  xacro. Element and parameter names come from the gazebo_ros_pkgs plugins for
+  ROS 2, but plugin XML is exactly the kind of thing where a plausible-looking
+  name fails at load time with no useful error.
+
+  Every block below carries a CONFIDENCE note. Treat the first launch as a
+  debugging session, not a validation: run `ros2 topic list` and compare against
+  what each block claims to publish. Expect to fix names.
+  ===========================================================================
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- Kept so the port presents the same interface as upstream. Only odom_source
+       changes behaviour here. -->
+  <xacro:arg name="odom_source" default="ground_truth"/>
+  <xacro:arg name="enable_lidar" default="true"/>
+  <xacro:arg name="enable_imu" default="true"/>
+
+  <!-- =====================================================================
+       Model-level plugins: drive, odometry, joint states
+       ===================================================================== -->
+  <gazebo>
+
+    <!-- gz-sim-diff-drive-system -> libgazebo_ros_diff_drive.so
+
+         CONFIDENCE: high on the plugin filename and the joint/geometry
+         parameters, which are long-standing. Lower on topic remapping: the
+         plugin publishes `odom` and `tf` as relative topics, so remapping
+         should work, but verify with `ros2 topic list` that you get
+         /odom_wheel and not /odom_wheel/odom.
+
+         max_wheel_acceleration carries over from upstream's
+         max_linear_acceleration of 1 m/s^2. Note that Classic's parameter is in
+         rad/s^2 per wheel, not m/s^2 for the body, so this is not the same
+         quantity and should be retuned. It only smooths commands, so a wrong
+         value costs realism, not correctness. -->
+    <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
+      <ros>
+        <namespace>/</namespace>
+        <xacro:unless value="${'$(arg odom_source)' == 'robot_wheels'}">
+          <remapping>odom:=odom_wheel</remapping>
+          <remapping>tf:=tf_wheel</remapping>
+        </xacro:unless>
+      </ros>
+
+      <update_rate>50</update_rate>
+      <left_joint>wheel_left_joint</left_joint>
+      <right_joint>wheel_right_joint</right_joint>
+      <wheel_separation>${wheel_base}</wheel_separation>
+      <wheel_diameter>${wheel_diameter}</wheel_diameter>
+
+      <max_wheel_torque>${motor_stall_torque}</max_wheel_torque>
+      <max_wheel_acceleration>1.0</max_wheel_acceleration>
+
+      <command_topic>cmd_vel</command_topic>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>true</publish_wheel_tf>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_footprint</robot_base_frame>
+    </plugin>
+
+    <!-- gz-sim-odometry-publisher-system -> libgazebo_ros_p3d.so
+
+         Ground truth: the true model pose, unaffected by wheel slip. This is
+         what the coverage benchmark scores, and what tells you how far the
+         wheel odometry has drifted from reality.
+
+         CONFIDENCE: medium. p3d is a Gazebo Classic model plugin that has
+         existed for a long time, but the ROS 2 port renamed its parameters to
+         snake_case (body_name, frame_name, ...) and I have not been able to
+         confirm the full set or its default topic. If /ground_truth/odom does
+         not appear, this block is the first place to look. -->
+    <plugin name="ground_truth" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <namespace>/ground_truth</namespace>
+      </ros>
+      <body_name>base_footprint</body_name>
+      <frame_name>odom</frame_name>
+      <update_rate>50</update_rate>
+      <gaussian_noise>0.0</gaussian_noise>
+    </plugin>
+
+    <!-- gz-sim-joint-state-publisher-system -> libgazebo_ros_joint_state_publisher.so
+
+         CONFIDENCE: high. -->
+    <plugin name="joint_state_publisher" filename="libgazebo_ros_joint_state_publisher.so">
+      <ros>
+        <namespace>/</namespace>
+      </ros>
+      <update_rate>30</update_rate>
+      <joint_name>wheel_left_joint</joint_name>
+      <joint_name>wheel_right_joint</joint_name>
+    </plugin>
+
+  </gazebo>
+
+  <!-- =====================================================================
+       Bumper contact sensors
+       ===================================================================== -->
+
+  <!-- 2D LiDAR
+           gpu_lidar -> sensor type="ray"
+
+           Same 360 samples, same 0.1 m minimum range, same 10 m maximum and the
+           same 0.01 m gaussian noise as upstream, so the sensor behaves the
+           same as the one upstream calibrates against.
+
+           Classic offers type="ray" (CPU) and type="gpu_ray". CPU is plenty for
+           360 beams at 5 Hz and does not need a GPU, so this is ray.
+
+           The scan plane lands at 88 mm above the floor: base_link sits 12.5 mm
+           up and base_scan is 75.5 mm above that. That number is what makes the
+           low barrier in the benchmark scene invisible, so if you move the LiDAR
+           mount, revisit the scene.
+
+           CONFIDENCE: high on the sensor block, which is standard Classic.
+           Medium on the plugin: libgazebo_ros_ray_sensor.so with
+           output_type sensor_msgs/LaserScan is the ROS 2 gazebo_ros form, and
+           the topic comes out as `scan` after the ~/out remap. -->
+  <xacro:if value="${'$(arg enable_lidar)' == 'true'}">
+  <gazebo reference="base_scan">
+    <sensor name="laser_scan_sensor" type="ray">
+      <pose>0 0 0 0 0 0</pose>
+      <visualize>true</visualize>
+      <always_on>true</always_on>
+      <update_rate>5</update_rate>
+
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <min_angle>0</min_angle>
+            <max_angle>${2*pi}</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>${lidar_min_range}</min>
+          <max>10.0</max>
+          <resolution>0.02</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </ray>
+
+      <plugin name="laser_controller" filename="libgazebo_ros_ray_sensor.so">
+        <ros>
+          <namespace>/</namespace>
+          <remapping>~/out:=scan</remapping>
+        </ros>
+        <output_type>sensor_msgs/LaserScan</output_type>
+        <frame_name>base_scan</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+  </xacro:if>
+
+  <!-- Bumper contacts
+         gz-sim contact system -> a Classic contact sensor on base_link
+
+         This is the metric the whole experiment turns on: contacts that
+         actually happened, as opposed to collisions the planner merely
+         predicted. Upstream splits it into left and right halves so a node can
+         tell which side was hit; Classic can do the same by naming collisions
+         in <contact>, but that list depends on how the URDF->SDF parser renames
+         things after lumping fixed joints, and getting it wrong fails silently
+         - the sensor loads and never fires again.
+
+         So this watches every collision on base_link instead, which cannot go
+         quiet for that reason. The cost is that a contact no longer says which
+         side it came from; recover that from the contact normal, or split it
+         later once the names are confirmed on a real run. Left/right matters
+         for the peel-off reflex in phase 2, not for the phase 1 count.
+
+         CONFIDENCE: medium. The sensor block is standard Classic. The plugin
+         filename libgazebo_ros_bumper.so is my best understanding of the ROS 2
+         name; if it is wrong the sensor still loads and simply publishes
+         nothing, which is exactly how the upstream facet-naming bug presented.
+         Check that a bumper topic exists BEFORE trusting a zero count. -->
+  <gazebo reference="base_link">
+    <sensor name="bumper" type="contact">
+      <always_on>true</always_on>
+      <update_rate>50</update_rate>
+      <visualize>false</visualize>
+      <plugin name="bumper_controller" filename="libgazebo_ros_bumper.so">
+        <ros>
+          <namespace>/</namespace>
+        </ros>
+        <frame_name>base_link</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <!-- IMU
+         gz-sim-imu-system -> sensor type="imu"
+
+         Upstream enables orientation in sim because the physical robot's gyro
+         does not report attitude. Kept the same. Fusion is off in the EKF for
+         now, so this is recorded, not used.
+
+         CONFIDENCE: medium-high on the sensor, medium on the plugin's
+         parameter names. -->
+  <xacro:if value="${'$(arg enable_imu)' == 'true'}">
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>${imu_update_rate}</update_rate>
+      <visualize>false</visualize>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>${imu_gyro_noise}</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>${imu_gyro_noise}</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>${imu_gyro_noise}</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>${imu_accel_noise}</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>${imu_accel_noise}</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>${imu_accel_noise}</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
+      <plugin name="imu_controller" filename="libgazebo_ros_imu_sensor.so">
+        <ros>
+          <namespace>/</namespace>
+          <remapping>~/out:=imu</remapping>
+        </ros>
+        <initial_orientation_as_reference>false</initial_orientation_as_reference>
+      </plugin>
+    </sensor>
+  </gazebo>
+  </xacro:if>
+
+  <!-- =====================================================================
+       Deferred to a later pass, in rough order of usefulness:
+
+         side range sensors    gpu_lidar, 3 samples over a 1 deg cone. Classic
+                               has a native <sensor type="ray"> for this, so it
+                               is a small job when wall following starts.
+         front ToF             a 16 x 8 gpu_lidar grid. Classic ray sensors only
+                               scan horizontally, so this needs either a
+                               gpu_ray with a vertical scan or a depth camera;
+                               it is a real port, not a rename.
+         stereo cameras        two <sensor type="camera">, straightforward but
+                               nothing needs them yet.
+
+       None of these are on the critical path to a coverage number.
+       ===================================================================== -->
+
+</robot>

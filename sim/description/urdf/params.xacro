@@ -1,0 +1,181 @@
+<?xml version="1.0" ?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <!-- ****************** ROBOT DIMENSIONS ****************** -->
+  <!-- Units: meters, degrees, kg, N*m, m/s2 -->
+  <!-- oomwoo-one (forked from Proscenic M6 Pro): round body 349mm dia, ~95mm tall (incl. LiDAR turret).
+       Geometry inherited — refine from the sourced parts + 3D design. -->
+  <!-- wheel_base = measured wheel track 235mm. The bridge uses its own odometry
+       constant WHEEL_BASE = 0.233m (2mm less); negligible, calibrate empirically. -->
+  <xacro:property name="wheel_diameter" value="0.068"/>
+  <xacro:property name="wheel_width" value="0.012"/>
+  <xacro:property name="caster_diameter" value="0.025"/>
+  <!-- Caster center to base edge. The caster sits at the FRONT (+x), like a
+       consumer vacuum: the support polygon then spans the wheel axle (x = 0)
+       forward to the caster, so the centre of mass must stay AHEAD of the axle.
+       See lidar_center_offset below, which is what puts it there. -->
+  <xacro:property name="caster_inset" value="0.030"/>
+  <xacro:property name="floor_clearance" value="0.0125"/>
+  <xacro:property name="base_diameter" value="0.349"/>
+  <xacro:property name="wheel_base" value="0.235"/>
+  <!-- Body cylinder: top is 79mm above the floor, minus 12.5mm floor gap = 66.5mm tall.
+       LiDAR housing sits on top (body top 79mm + 18mm housing = ~97mm total height). -->
+  <xacro:property name="lower_cylinder_height" value="0.0665"/>
+  <!-- LiDAR housing, measured 18mm, seated flush on the body top -->
+  <xacro:property name="laser_puck_height" value="0.018"/>
+  <xacro:property name="laser_puck_diameter" value="0.083"/>
+  <!-- offset = laser_puck_height/2 so the housing bottom sits at the body top -->
+  <xacro:property name="laser_puck_offset" value="0.009"/>
+  <!-- 2D LiDAR minimum range; kept in sync with the sensor <min> in plugins.xacro. -->
+  <xacro:property name="lidar_min_range" value="0.1"/>
+  <!-- LiDAR fore/aft mount on the body top (base_link +x = forward). Seated so its
+       minimum range lands at the front body edge: base_diameter/2 - lidar_min_range
+       (about 0.0745 m) forward of centre. That puts the sensing floor at the bumper
+       and brings a convex corner into view a little sooner.
+
+       This offset also carries the robot's BALANCE, so do not change it in isolation.
+       The caster is at the front, so the support spans x = 0 (wheel axle) to the
+       caster and the centre of mass must stay AHEAD of the axle. The 150 g puck at
+       +0.0745 m is what puts it there: CoM = +2.2 mm with this offset, -1.6 mm with
+       the turret centred. Get it wrong and the robot rests tilted on a body edge,
+       which drops the scan plane onto the floor about a metre out and paints a
+       phantom "wall" that follows the robot everywhere. Re-check the CoM (mass x
+       position over all links, axle at x = 0) after touching this or the caster. -->
+  <xacro:property name="lidar_center_offset" value="${base_diameter/2 - lidar_min_range}"/>
+
+  <!-- N*m -->
+  <xacro:property name="motor_stall_torque" value="0.5"/>
+  <xacro:property name="max_linear_acceleration" value="1"/>
+  <xacro:property name="lower_cylinder_mass" value="2.500"/>
+  <!-- caster and battery weight -->
+  <xacro:property name="caster_mass" value="0.050"/>
+  <xacro:property name="wheel_mass" value="0.100"/>
+  <xacro:property name="laser_puck_mass" value="0.150"/>
+  <!-- ****************** **************** ****************** -->
+
+  <!-- Front bumper = the front 180 deg of the body's cylindrical wall, modelled as
+       a continuous faceted arc. Left half spans 0..+90 deg, right half -90..0 deg
+       (they meet at the front, 0 deg, so there is no dead-center gap). Each half is
+       'bumper_facets_per_side' thin box facets, named so the contact sensors can
+       reference them.
+
+       FLUSH, not proud: the facets sit just inside the body radius, with each
+       facet's outer corners landing exactly on it, so the robot's outline is a
+       plain circle of base_diameter, like every consumer vacuum. A round outline
+       is what lets a robot turn in place out of the tightest dead end; a bumper
+       standing 5 mm proud (the earlier model) made the robot 7 mm wider in front
+       than behind, and its facet corners reached 0.1814 m instead of 0.1745 m.
+
+       Flush has one trap. If the body's collision cylinder had the same radius as
+       the bumper, the two would tie, and wherever the body touched first the
+       contact sensor (which watches only the facets) would never fire. So the
+       body's COLLISION cylinder is bumper_lead smaller than the facets' flat outer
+       faces, which is how a real robot is built: the chassis sits behind the
+       bumper shell. The body's VISUAL stays full size.
+
+       12 facets per side keep the faceting error at 0.5 mm (6 gave 1.9 mm). -->
+  <xacro:property name="bumper_facets_per_side" value="12"/>
+  <xacro:property name="bumper_thickness" value="0.010"/> <!-- radial -->
+  <xacro:property name="bumper_lead" value="0.002"/> <!-- bumper face ahead of the body collision -->
+  <!-- Bumper spans the FULL body cylinder height, centered on it (like a consumer
+       vacuum), so a low ledge the body can hit (e.g. a bookcase bottom shelf)
+       always contacts the bumper instead of wedging in the gap above or below it.
+       Derived from lower_cylinder_height so the two can never drift apart. -->
+  <xacro:property name="bumper_height" value="${lower_cylinder_height}"/>
+  <xacro:property name="bumper_z" value="${lower_cylinder_height/2}"/>  <!-- = body cylinder center, base_link frame -->
+
+  <!-- ****************** SIDE DISTANCE SENSORS ****************** -->
+  <!-- Left/right short-range wall sensors. Modelled as a single-ray gpu_lidar
+       (gz-sim has no native Range/ToF sensor) aimed straight out to the side,
+       perpendicular to forward, at the body's mid-height on each side edge. That
+       aim reads the wall distance directly abeam, the basis for distance-keeping
+       wall following. On the physical robot this maps to a ToF (sensor_msgs/Range);
+       in sim it is a 1-beam sensor_msgs/LaserScan. All values below are tunable. -->
+  <!-- Rear IR beacon receivers, for docking. Two of them, splayed either side of
+       dead astern with a baffle between, so the dock's beacon is centred when
+       both read the same: the classic balance measurement. They sit at body
+       mid-height to match the beacon's height in the dock, and face BACKWARDS
+       because the robot reverses in to wash its mops.
+
+       ir_rx_splay_deg is the mount angle either side of astern. Wider splay
+       sharpens the balance point (the signals cross more steeply) but shrinks
+       the arc in which both receivers see the beacon at all, which is what the
+       spin-to-find search has to land in. -->
+  <xacro:property name="ir_rx_splay_deg" value="25.0"/>
+  <xacro:property name="ir_rx_fov_deg" value="50.0"/>      <!-- half-angle each -->
+  <xacro:property name="ir_rx_y" value="0.030"/>           <!-- lateral offset -->
+  <xacro:property name="ir_rx_z" value="${lower_cylinder_height/2}"/>
+  <xacro:property name="ir_rx_size" value="0.010"/>
+  <xacro:property name="ir_rx_mass" value="0.004"/>
+  <xacro:property name="ir_baffle_len" value="0.030"/>     <!-- fin, inward from the shell -->
+  <xacro:property name="ir_baffle_thick" value="0.003"/>
+
+  <xacro:property name="range_sensor_min" value="0.02"/>          <!-- m: closest reading -->
+  <xacro:property name="range_sensor_max" value="0.50"/>          <!-- m: beyond this reads as no wall -->
+  <xacro:property name="range_sensor_resolution" value="0.005"/>  <!-- m -->
+  <xacro:property name="range_sensor_angle_deg" value="90.0"/>    <!-- deg from forward; 90 = straight out to the side -->
+  <xacro:property name="range_sensor_x" value="0.0"/>             <!-- fore/aft mount offset along the side -->
+  <xacro:property name="range_sensor_z" value="${lower_cylinder_height/2}"/> <!-- body mid-height, base_link frame -->
+  <xacro:property name="range_sensor_update_rate" value="20"/>    <!-- Hz -->
+  <xacro:property name="range_sensor_size" value="0.012"/>        <!-- visual cube edge (m) -->
+  <xacro:property name="range_sensor_mass" value="0.005"/>        <!-- kg, negligible -->
+  <!-- gz-sim's gpu_lidar needs 2 or more samples: angle_step = (max-min)/(samples-1),
+       so samples=1 divides by zero (angle_step = NaN, the ray never fires). Model
+       the beam as a narrow few-sample cone instead, like a real ToF's small field
+       of view; a consumer takes the nearest (min) range as THE distance. -->
+  <xacro:property name="range_sensor_samples" value="3"/>         <!-- rays across the FOV (2 or more) -->
+  <xacro:property name="range_sensor_fov_deg" value="1.0"/>       <!-- total beam FOV (deg) -->
+
+  <!-- ****************** FRONT DISTANCE SENSOR (multizone ToF) ****************** -->
+  <!-- Front-facing depth grid, front & center. Models TWO VL53L7CX multizone ToF
+       sensors (each 8x8 zones, 60 deg horizontal FoV) mounted one aimed 30 deg left
+       and one 30 deg right, so together they span 120 deg. Represented as ONE
+       gpu_lidar with a 16 (= 8 + 8) x 8 ray grid over 120 deg H x 60 deg V, where
+       each ray is a zone distance. Published as a PointCloud2 (128 points); on the
+       physical robot these are per-zone ToF ranges. All values tunable. -->
+  <xacro:property name="tof_front_h_samples" value="16"/>          <!-- 8 + 8 zones across -->
+  <xacro:property name="tof_front_v_samples" value="8"/>           <!-- 8 zones tall -->
+  <xacro:property name="tof_front_hfov_deg" value="120.0"/>        <!-- 2 x 60 deg -->
+  <xacro:property name="tof_front_vfov_deg" value="60.0"/>         <!-- one sensor's vertical FoV -->
+  <xacro:property name="tof_front_min" value="0.02"/>              <!-- m -->
+  <xacro:property name="tof_front_max" value="4.0"/>               <!-- m: VL53L7CX long range -->
+  <xacro:property name="tof_front_resolution" value="0.005"/>      <!-- m -->
+  <xacro:property name="tof_front_update_rate" value="15"/>        <!-- Hz -->
+  <xacro:property name="tof_front_x" value="${base_diameter/2}"/>  <!-- front surface -->
+  <xacro:property name="tof_front_z" value="${lower_cylinder_height/2}"/> <!-- mid-height -->
+  <xacro:property name="tof_front_size" value="0.012"/>            <!-- visual cube edge (m) -->
+  <xacro:property name="tof_front_mass" value="0.005"/>            <!-- kg, negligible -->
+
+  <!-- ****************** FRONT STEREO CAMERAS (OV5647) ****************** -->
+  <!-- Two RGB cameras, front & center, flanking the ToF sensor left/right, for
+       obstacle recognition and future stereo depth. VGA, wide FoV. The stereo base
+       is small on purpose (we only need coarse obstacle depth). URDF + camera topics
+       only for now, no stereo processing yet. Each has a REP-103 optical frame
+       (z-forward, x-right, y-down) that the image is published in. Tunable. -->
+  <xacro:property name="camera_width" value="640"/>                <!-- VGA -->
+  <xacro:property name="camera_height" value="480"/>
+  <xacro:property name="camera_hfov_deg" value="120.0"/>
+  <xacro:property name="camera_near" value="0.02"/>                <!-- m -->
+  <xacro:property name="camera_far" value="10.0"/>                 <!-- m -->
+  <xacro:property name="camera_update_rate" value="15"/>           <!-- Hz -->
+  <xacro:property name="camera_baseline" value="0.05"/>            <!-- m: compact stereo base -->
+  <xacro:property name="camera_x" value="${base_diameter/2}"/>     <!-- front surface -->
+  <xacro:property name="camera_z" value="${lower_cylinder_height/2}"/> <!-- mid-height, flanking the ToF -->
+  <xacro:property name="camera_size" value="0.010"/>               <!-- visual cube edge (m) -->
+  <xacro:property name="camera_mass" value="0.005"/>               <!-- kg, negligible -->
+
+  <!-- ****************** IMU ****************** -->
+  <!-- 6-axis IMU (gyro + accelerometer) near the body center. Orientation is
+       ENABLED in sim (see plugins.xacro), so /imu also carries the true attitude
+       (the physical Proscenic gyro has none). IMU fusion in the EKF is off for now
+       (config/ekf.yaml). Tunable. -->
+  <xacro:property name="imu_x" value="0.0"/>
+  <xacro:property name="imu_y" value="0.0"/>
+  <xacro:property name="imu_z" value="${lower_cylinder_height/2}"/> <!-- body mid-height -->
+  <xacro:property name="imu_update_rate" value="100"/>             <!-- Hz -->
+  <xacro:property name="imu_gyro_noise" value="0.0002"/>           <!-- rad/s stddev (MEMS-ish) -->
+  <xacro:property name="imu_accel_noise" value="0.017"/>           <!-- m/s^2 stddev -->
+  <xacro:property name="imu_size" value="0.010"/>                  <!-- visual cube edge (m) -->
+  <xacro:property name="imu_mass" value="0.005"/>                  <!-- kg, negligible -->
+
+  <xacro:property name="DEG2RAD" value="0.0174533"/>
+</robot>

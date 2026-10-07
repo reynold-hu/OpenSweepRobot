@@ -31,9 +31,38 @@ that the package is split cleanly:
 | `urdf/plugins.xacro` | every simulator plugin, ~326 lines | No — this is the whole port |
 
 So the port is confined to one file: rewriting the `gz-sim-*` plugins as Gazebo
-Classic `libgazebo_ros_*` plugins. Phase 1 needs only five of them — diff drive,
-2D LiDAR, bumper contacts, ground-truth odometry and joint states. The cameras, the
-ToF and the side range sensors are not needed to measure coverage and can wait.
+Classic `libgazebo_ros_*` plugins.
+
+```
+sim/description/
+├── LICENSE                       Apache-2.0, from upstream
+└── urdf/
+    ├── robot.urdf.xacro          vendored; one include line edited
+    ├── params.xacro              vendored unchanged
+    ├── inertial.xacro            vendored unchanged
+    ├── materials.xacro           vendored unchanged
+    ├── plugins.xacro             vendored unchanged, now unused; kept as the
+    │                             reference for anything ported later
+    └── plugins_gazebo_classic.xacro    ours — the entire port
+```
+
+Vendored from `makerspet/oomwoo-one` at commit `e7759d4`. The only edit to an
+upstream file is `robot.urdf.xacro` line 5, which includes our plugin file where
+upstream includes theirs.
+
+The port covers what phases 1 and 2 need — differential drive, 2D LiDAR, bumper
+contacts, ground-truth odometry, joint states and the IMU. Deferred: the two
+stereo cameras, the front multizone ToF and the side range sensors. The ToF is a
+real port rather than a rename, since Classic ray sensors only scan horizontally.
+
+**None of the port has been executed.** It was written on a machine with no ROS 2
+and no Gazebo, so no plugin has been loaded and no xacro expanded. `check_description.py`
+verifies what can be checked statically — that every `${...}` resolves to a
+declared property, arg or macro parameter, that every link and joint a plugin
+names actually exists, and that the includes point somewhere. It cannot tell you
+whether `libgazebo_ros_bumper.so` is the right filename. Expect the first launch
+to be a debugging session; the script prints a checklist of every plugin and
+topic the port claims, to compare `ros2 topic list` against.
 
 ## The scene
 
@@ -147,9 +176,11 @@ the same product.
 | :-- | :-- |
 | `tools/check_scene.py` | Parses the world; checks for accidental overlap, verifies the gap widths, doorway, threshold height and start pose, and prints the reachable floor area. Run it after any edit to the world. |
 | `tools/coverage_metrics.py` | Scores a recorded trajectory against the scene. Stdlib only, so it runs on whatever machine recorded the run. |
+| `tools/check_description.py` | Static checks on the robot description and the Gazebo Classic port: unresolved xacro properties, links or joints named by a plugin that do not exist, broken includes, malformed XML. |
 
 ```bash
 python3 sim/tools/check_scene.py sim/worlds/coverage_test.world
+python3 sim/tools/check_description.py
 ```
 
 Note that `check_scene.py` reports area analytically and `coverage_metrics.py`
